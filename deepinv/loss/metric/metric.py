@@ -6,7 +6,7 @@ from torch import Tensor
 from torch.nn import Module
 
 from deepinv.loss.metric.functional import complex_abs, norm
-from deepinv.utils.plotting import rescale_img
+from deepinv.utils.plotting import rescale
 
 
 def import_pyiqa() -> ModuleType:
@@ -74,9 +74,9 @@ class Metric(Module):
             if not isinstance(norm_inputs, str):
                 raise ValueError("norm_inputs must be str or None.")
             elif norm_inputs.lower() == "min_max":
-                normalizer = lambda x: rescale_img(x, rescale_mode="min_max")
+                normalizer = lambda x: rescale(x, rescale_mode="min_max")
             elif norm_inputs.lower() == "clip":
-                normalizer = lambda x: rescale_img(x, rescale_mode="clip")
+                normalizer = lambda x: rescale(x, rescale_mode="clip")
             elif norm_inputs.lower() == "l2":
                 normalizer = lambda x: x / norm(x)
             elif norm_inputs.lower() == "standardize":

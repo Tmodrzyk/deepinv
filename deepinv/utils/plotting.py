@@ -107,38 +107,15 @@ def prepare_images(x=None, y=None, x_net=None, x_nl=None, rescale_mode="min_max"
 
         vis_array = []
         for img in imgs:
-            out = preprocess_img(img, rescale_mode=rescale_mode)
+            out = rescale(img, rescale_mode=rescale_mode)
             vis_array.append(out)
         vis_array = torch.cat(vis_array)
         grid_image = make_grid(vis_array, nrow=x_net.shape[0])
 
     for k in range(len(imgs)):
-        imgs[k] = preprocess_img(imgs[k], rescale_mode=rescale_mode)
+        imgs[k] = rescale(imgs[k], rescale_mode=rescale_mode)
 
     return imgs, titles, grid_image, caption
-
-
-def preprocess_img(im, rescale_mode="min_max"):
-    r"""
-    Preprocesses an image tensor for plotting.
-
-    :param torch.Tensor im: the image to preprocess.
-    :param str rescale_mode: the rescale mode, either 'min_max' or 'clip'.
-    :return: the preprocessed image.
-    """
-    with torch.no_grad():
-        if im.shape[1] == 2:  # for complex images
-            pimg = im.pow(2).sum(dim=1, keepdim=True).sqrt().type(torch.float32)
-        elif im.shape[1] > 3:
-            pimg = im.type(torch.float32)
-        else:
-            if torch.is_complex(im):
-                pimg = im.abs().type(torch.float32)
-            else:
-                pimg = im.type(torch.float32)
-
-        pimg = rescale_img(pimg, rescale_mode=rescale_mode)
-    return pimg
 
 
 def tensor2uint(img):
@@ -153,29 +130,45 @@ def numpy2uint(img):
     return np.uint8((img * 255.0).round())
 
 
-def rescale_img(im, rescale_mode="min_max"):
+def rescale(im: torch.Tensor, rescale_mode: str = "min_max") -> torch.Tensor:
     r"""
-    Rescale an image tensor.
+    Rescale an image tensor for plotting.
 
-    :param torch.Tensor im: the image to rescale.
-    :param str rescale_mode: the rescale mode, either 'min_max' or 'clip'.
+    Handles complex-valued images, RGB and grayscale.
+
+    :param torch.Tensor im: the image to rescale
+    :param str rescale_mode: Rescale mode, either 'min_max' or 'clip'.
     :return: the rescaled image.
     """
-    img = im.clone()
-    if rescale_mode == "min_max":
-        shape = img.shape
-        img = img.reshape(shape[0], -1)
-        mini = img.min(1)[0]
-        maxi = img.max(1)[0]
-        idx = mini < maxi
-        mini = mini[idx].unsqueeze(1)
-        maxi = maxi[idx].unsqueeze(1)
-        img[idx, :] = (img[idx, :] - mini) / (maxi - mini)
-        img = img.reshape(shape)
-    elif rescale_mode == "clip":
-        img = img.clamp(min=0.0, max=1.0)
-    else:
-        raise ValueError("rescale_mode has to be either 'min_max' or 'clip'.")
+    with torch.no_grad():
+        # Handle complex or multi-channel input
+        if im.shape[1] == 2:  # complex-valued image encoded in 2 channels
+            im = im.pow(2).sum(dim=1, keepdim=True).sqrt().type(torch.float32)
+        elif im.shape[1] > 3:
+            im = im.type(torch.float32)
+        else:
+            im = (
+                im.abs().type(torch.float32)
+                if torch.is_complex(im)
+                else im.type(torch.float32)
+            )
+
+        # Rescaling
+        img = im.clone()
+        if rescale_mode == "min_max":
+            shape = img.shape
+            img = img.view(shape[0], -1)
+            mini = img.min(dim=1, keepdim=True)[0]
+            maxi = img.max(dim=1, keepdim=True)[0]
+            diff = maxi - mini
+            valid = diff > 0
+            img[valid] = (img[valid] - mini[valid]) / diff[valid]
+            img = img.view(*shape)
+        elif rescale_mode == "clip":
+            img = img.clamp(min=0.0, max=1.0)
+        else:
+            raise ValueError("rescale_mode must be 'min_max' or 'clip'.")
+
     return img
 
 
@@ -277,7 +270,7 @@ def plot(
     imgs = []
     for im in img_list:
         col_imgs = []
-        im = preprocess_img(im, rescale_mode=rescale_mode)
+        im = rescale(im, rescale_mode=rescale_mode)
         for i in range(min(im.shape[0], max_imgs)):
             col_imgs.append(
                 im[i, ...].detach().permute(1, 2, 0).squeeze().cpu().numpy()
@@ -657,7 +650,7 @@ def plot_inset(
             (inset_loc[0], 1 - inset_loc[1] - inset_size, inset_size, inset_size)
         )
         axins.imshow(
-            rescale_img(img)
+            rescale(img)
             .type(torch.float32)
             .squeeze(0)
             .permute(1, 2, 0)
@@ -987,7 +980,7 @@ def plot_ortho3D(
                     pimg = im[i, :, :, :, :].abs().type(torch.float32)
                 else:
                     pimg = im[i, :, :, :, :].type(torch.float32)
-            pimg = rescale_img(pimg, rescale_mode=rescale_mode)
+            pimg = rescale(pimg, rescale_mode=rescale_mode)
             col_imgs.append(pimg.detach().permute(1, 2, 3, 0).cpu().numpy())
         imgs.append(col_imgs)
 

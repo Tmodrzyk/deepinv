@@ -1,7 +1,7 @@
 from .logger import AverageMeter, ProgressMeter, get_timestamp
 from .metric import cal_psnr, cal_mse, cal_psnr_complex
 from .plotting import (
-    rescale_img,
+    rescale,
     plot,
     torch2cpu,
     plot_curves,
