@@ -122,6 +122,22 @@ omit = ['examples/*', 'deepinv/tests']  # define paths to omit
 show_missing = true
 skip_covered = true
 
+#####################################################################
+# Ruff configuration
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "UP006",  # non-pep585-annotation
+    "F401",  # unused imports
+    "B905",  # zip-without-explicit-strict
+]
+
 [tool.ruff.lint.per-file-ignores]
 # NOTE: Rule F401 is ruff's unused imports rule.
 "__init__.py" = ["F401"]
