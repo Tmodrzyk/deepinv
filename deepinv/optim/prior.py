@@ -1,7 +1,8 @@
+from matplotlib.pylab import gamma
 import numpy as np
 import torch
 import torch.nn as nn
-
+from torch.nn import functional as F
 from deepinv.optim.potential import Potential
 from deepinv.models.tv import TVDenoiser
 from deepinv.models.wavdict import WaveletDenoiser, WaveletDictDenoiser
@@ -707,3 +708,135 @@ class L12Prior(Prior):
         # Creating a mask to avoid diving by zero
         # if an element of z is zero, then it is zero in x, therefore torch.multiply(z, x) is zero as well
         return z4
+
+
+class RelativeDifferencePrior(Prior):
+    r"""
+    Relative difference prior (https://ieeexplore.ieee.org/document/998681).
+        :math:`g(x) = sum_j sum_{k in N_j} (x_j - x_k)^2 / (x_j + x_k + gamma |x_j - x_k|)`
+
+    This prior is notably used in the QClear (https://www.gehealthcare.com/-/media/739d885baa59485aaef5ac0e0eeb44a4.pdf) algorithm for PET reconstruction.
+    It runs with 4-neighbors in 2D (up, down, left, right), and 6-neighbors in 3D (up, down, left, right, front, back).
+
+    """
+
+    def __init__(self, x=None, gamma=1e-3, eps=1e-10, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.explicit_prior = True
+        self.gamma = gamma
+        self.eps = eps
+
+        @staticmethod
+        def _shift4(x):
+            # x: (B,C,H,W). Use replicate padding so borders contribute zero (diff=0)
+            # Directions: right, left, down, up
+            xr = F.pad(x, (0, 1, 0, 0), mode="replicate")[
+                :, :, :, 1:
+            ]  # neighbor to the right
+            xl = F.pad(x, (1, 0, 0, 0), mode="replicate")[
+                :, :, :, :-1
+            ]  # neighbor to the left
+            xd = F.pad(x, (0, 0, 0, 1), mode="replicate")[:, :, 1:, :]  # neighbor down
+            xu = F.pad(x, (0, 0, 1, 0), mode="replicate")[:, :, :-1, :]  # neighbor up
+            return xr, xl, xd, xu
+
+        @staticmethod
+        def _shift6(x):
+            # x: (B,C,D,H,W). Use replicate padding so borders contribute zero (diff=0)
+            # Directions: right, left, down, up, front, back
+            xr = F.pad(x, (0, 1, 0, 0, 0, 0), mode="replicate")[
+                :, :, :, :, 1:
+            ]  # neighbor to the right
+            xl = F.pad(x, (1, 0, 0, 0, 0, 0), mode="replicate")[
+                :, :, :, :, :-1
+            ]  # neighbor to the left
+            xd = F.pad(x, (0, 0, 0, 1, 0, 0), mode="replicate")[
+                :, :, :, 1:, :
+            ]  # neighbor down
+            xu = F.pad(x, (0, 0, 1, 0, 0, 0), mode="replicate")[
+                :, :, :, :-1, :
+            ]  # neighbor up
+            xf = F.pad(x, (0, 0, 0, 0, 0, 1), mode="replicate")[
+                :, :, 1:, :, :
+            ]  # neighbor front
+            xb = F.pad(x, (0, 0, 0, 0, 1, 0), mode="replicate")[
+                :, :, :-1, :, :
+            ]  # neighbor back
+            return xr, xl, xd, xu, xf, xb
+
+        def fn(self, x, *args, **kwargs):
+            r"""
+            Computes the relative difference prior :math:`\reg{x} = \sum_j \sum_{k \in N_j} \frac{(x_j - x_k)^2}{x_j + x_k + \gamma |x_j - x_k|}`.
+
+            Works with both 2D inputs (B,C,H,W) and 3D inputs (B,C,D,H,W).
+            """
+
+            def pair_term(xj, xk):
+                diff = xj - xk
+                abs_diff = diff.abs()
+                denom = (xj + xk) + self.gamma * abs_diff
+                denom = torch.clamp(denom, min=self.eps)
+                return (diff * diff) / denom
+
+            # Check if input is 3D or 2D
+            if len(x.shape) == 5:
+                xr, xl, xd, xu, xf, xb = self._shift6(x)
+                prior_map = (
+                    pair_term(x, xr)
+                    + pair_term(x, xl)
+                    + pair_term(x, xd)
+                    + pair_term(x, xu)
+                    + pair_term(x, xf)
+                    + pair_term(x, xb)
+                ).sum(dim=1)
+            else:
+                xr, xl, xd, xu = self._shift4(x)
+                prior_map = (
+                    pair_term(x, xr)
+                    + pair_term(x, xl)
+                    + pair_term(x, xd)
+                    + pair_term(x, xu)
+                ).sum(dim=1)
+
+            return prior_map
+
+        def grad(self, x, *args, **kwargs):
+            r"""
+            Calculates the gradient of the relative difference prior :math:`\nabla_i \reg{x} = \frac{2 (x_j - x_k)(\gamma |x_j - x_k| + x_j + 3 x_k)}{(x_j + x_k + \gamma | x_j - x_k|)^2}`.
+
+            Works with both 2D inputs (B,C,H,W) and 3D inputs (B,C,D,H,W).
+
+            :param torch.Tensor x: Variable :math:`x` at which the gradient is computed.
+            :return: (:class:`torch.Tensor`) gradient at :math:`x`.
+            """
+
+            def pair_grad_j(xj, xk):
+                diff = xj - xk
+                abs_diff = diff.abs()
+                denom = (xj + xk) + self.gamma * abs_diff
+                denom = torch.clamp(denom, min=self.eps)
+                denom2 = denom * denom
+                numer = 2.0 * diff * (self.gamma * abs_diff + xj + 3.0 * xk)
+                return numer / denom2
+
+            # Check if input is 3D or 2D
+            if len(x.shape) == 5:
+                xr, xl, xd, xu, xf, xb = self._shift6(x)
+                g = (
+                    pair_grad_j(x, xr)
+                    + pair_grad_j(x, xl)
+                    + pair_grad_j(x, xd)
+                    + pair_grad_j(x, xu)
+                    + pair_grad_j(x, xf)
+                    + pair_grad_j(x, xb)
+                )
+            else:
+                xr, xl, xd, xu = self._shift4(x)
+                g = (
+                    pair_grad_j(x, xr)
+                    + pair_grad_j(x, xl)
+                    + pair_grad_j(x, xd)
+                    + pair_grad_j(x, xu)
+                )
+
+            return g
