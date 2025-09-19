@@ -713,7 +713,7 @@ class L12Prior(Prior):
 class RelativeDifferencePrior(Prior):
     r"""
     Relative difference prior (https://ieeexplore.ieee.org/document/998681).
-        :math:`g(x) = sum_j sum_{k in N_j} (x_j - x_k)^2 / (x_j + x_k + gamma |x_j - x_k|)`
+        :math:`g(x) = \sum_j \sum_{k \in N_j} \frac{(x_j - x_k)^2}{(x_j + x_k) + \gamma |x_j - x_k|}`
 
     This prior is notably used in the QClear (https://www.gehealthcare.com/-/media/739d885baa59485aaef5ac0e0eeb44a4.pdf) algorithm for PET reconstruction.
     It runs with 4-neighbors in 2D (up, down, left, right), and 6-neighbors in 3D (up, down, left, right, front, back).
